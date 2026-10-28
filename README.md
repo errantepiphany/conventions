@@ -91,7 +91,15 @@ pinned to a tagged commit of this repository:
 | `issue-triage.yaml` | `policy-doc` |
 | `automated-review.yaml` | `pr_number`, `model`, `prompt-path`, `cloud-ml-region`, `gcp-project-id` |
 | `publish-dry-run.yaml` | `make-args` |
-| `coverage.yaml`, `msrv.yaml`, `mutants.yaml`, `semver.yaml`, `supply-chain.yaml` | none |
+| `supply-chain.yaml` | `report-issues`, `issue-title` |
+| `coverage.yaml`, `msrv.yaml`, `mutants.yaml`, `semver.yaml` | none |
+
+`supply-chain.yaml` runs `cargo audit` and `cargo deny check` on push to the
+default branch and on a daily schedule, not on pull requests. By default it
+also opens a tracking issue when that run fails, comments on the existing one
+instead of duplicating it, and closes it when the audit recovers. Pass
+`report-issues: false` to turn that off; otherwise pass the
+`PRAXIS_BOT_APP_ID` and `PRAXIS_BOT_APP_PRIVATE_KEY` secrets.
 
 ```yaml
 jobs:
@@ -99,6 +107,19 @@ jobs:
     permissions:
       contents: read
     uses: praxis-proxy/conventions/.github/workflows/coverage.yaml@<sha> # v0.4.0
+```
+
+A caller that keeps the default issue reporting also passes the bot secrets:
+
+```yaml
+jobs:
+  supply-chain:
+    permissions:
+      contents: read
+    uses: praxis-proxy/conventions/.github/workflows/supply-chain.yaml@<sha> # v0.5.0
+    secrets:
+      PRAXIS_BOT_APP_ID: ${{ secrets.PRAXIS_BOT_APP_ID }}
+      PRAXIS_BOT_APP_PRIVATE_KEY: ${{ secrets.PRAXIS_BOT_APP_PRIVATE_KEY }}
 ```
 
 The caller picks the triggers, grants the permissions

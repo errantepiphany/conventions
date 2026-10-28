@@ -8,16 +8,43 @@ name: Supply Chain
 # must grant at least the permissions the jobs below ask for. Actions are
 # pinned by SHA rather than referenced by local path, because a called
 # workflow resolves local paths against the caller's checkout.
+#
+# The dependency audit is not a pull request gate: advisory-database updates
+# and duplicate dependencies appear without any commit in the PR, so the result
+# says nothing about the change under review. Run it on push to the default
+# branch and on a schedule instead. When a default-branch run fails, the
+# `report` job opens a tracking issue (or comments on the one already open) and
+# closes it again once the audit is green. Callers that do not want the issue
+# must pass `report-issues: false`; callers that keep the default must pass the
+# `PRAXIS_BOT_APP_ID` and `PRAXIS_BOT_APP_PRIVATE_KEY` secrets.
 
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   schedule:
     - cron: "23 3 * * *"
   workflow_dispatch:
   workflow_call:
+    inputs:
+      report-issues:
+        description: >-
+          Open, update, and close a tracking issue when the audit fails on the
+          default branch. Needs the praxis-bot secrets.
+        required: false
+        type: boolean
+        default: true
+      issue-title:
+        description: Title of the tracking issue.
+        required: false
+        type: string
+        default: Supply chain audit failing on main
+    secrets:
+      PRAXIS_BOT_APP_ID:
+        description: App ID for the praxis-bot App, which writes the tracking issue.
+        required: false
+      PRAXIS_BOT_APP_PRIVATE_KEY:
+        description: Private key for the praxis-bot App.
+        required: false
 
 concurrency:
   group: ${{ github.workflow }}-supply-chain-${{ github.ref }}
@@ -52,3 +79,76 @@ jobs:
       - name: Supply chain audit
         if: steps.ws.outputs.empty == 'false'
         uses: praxis-proxy/conventions/.github/actions/supply-chain-audit@b1d3ce12ea9a4d12b1e62e3af5ad76c89000a072 # v0.2.0-9-g747ec18
+
+  # ----------------------------------------------------------------------------
+  # Tracking Issue
+  #
+  # `inputs` is empty for the direct push/schedule triggers, so the `!= false`
+  # test keeps reporting on for this repository and for callers that leave the
+  # default, while `report-issues: false` turns it off.
+  # ----------------------------------------------------------------------------
+
+  report:
+    needs: [audit]
+    if: >-
+      !cancelled()
+      && inputs.report-issues != false
+      && (needs.audit.result == 'success' || needs.audit.result == 'failure')
+      && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      ISSUE_TITLE: ${{ inputs.issue-title || 'Supply chain audit failing on main' }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.PRAXIS_BOT_APP_ID }}
+          private-key: ${{ secrets.PRAXIS_BOT_APP_PRIVATE_KEY }}
+          permission-issues: write
+
+      - name: Find the open tracking issue
+        id: existing
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          number=$(gh issue list --state open --limit 200 --json number,title \
+            | jq -r --arg title "$ISSUE_TITLE" '.[] | select(.title == $title) | .number' \
+            | head -n 1)
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the tracking issue
+        if: needs.audit.result == 'failure'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.existing.outputs.number }}
+        run: |
+          set -euo pipefail
+          body=$(printf '%s\n' \
+            'The supply chain audit (`cargo audit` + `cargo deny check`) failed on the default branch.' \
+            '' \
+            "- Failing run: ${RUN_URL}" \
+            '' \
+            'Reproduce locally with `make audit`.' \
+            'This issue closes automatically when a later run passes.')
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --body "$body"
+          else
+            gh issue create --title "$ISSUE_TITLE" --body "$body"
+          fi
+
+      - name: Close the tracking issue once the audit recovers
+        if: needs.audit.result == 'success' && steps.existing.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.existing.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$NUMBER" \
+            --body "The supply chain audit passes again: ${RUN_URL}"
+          gh issue close "$NUMBER" --reason completed

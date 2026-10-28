@@ -42,7 +42,11 @@ make mutants        # mutation testing (cargo-mutants)
 
 Security is enforced at every stage of development.
 `cargo audit` and `cargo deny check` are run as part of
-the `make audit` target. The `deny.toml` config bans
+the `make audit` target. CI runs them on every push to
+the default branch and on a daily schedule, not on pull
+requests, and tracks a failure in a single issue that
+later failures comment on and a passing run closes. The
+`deny.toml` config bans
 wildcard version requirements, unknown registries, and
 unknown git sources. Multiple versions of the same crate
 produce a warning. All crates enforce
