@@ -106,7 +106,7 @@ jobs:
   coverage:
     permissions:
       contents: read
-    uses: praxis-proxy/conventions/.github/workflows/coverage.yaml@<sha> # v0.4.0
+    uses: praxis-proxy/conventions/.github/workflows/coverage.yaml@<sha> # v0.5.0
 ```
 
 A caller that keeps the default issue reporting also passes the bot secrets:
